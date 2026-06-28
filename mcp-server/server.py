@@ -515,12 +515,13 @@ async def update_item(
         data["lat"] = None
         data["lng"] = None
     elif place_id is not None and place_id > 0:
+        existing_text = current.get("text", "")
         await _enrich_item_with_place(
             data,
             trip_id,
             place_id,
-            text=text,
-            comment=effective_comment,
+            text=text or existing_text,
+            comment=effective_comment if effective_comment is not None else current.get("comment"),
             fill_text=not text,
             fill_price=price is None,
             fill_comment=effective_comment is None,
