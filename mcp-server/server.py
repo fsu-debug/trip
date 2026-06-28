@@ -36,6 +36,24 @@ def _slim_provider_result(result: dict) -> dict:
     }
 
 
+def _item_comment(item: dict) -> str | None:
+    for key in ("comment", "notes", "description", "remarks"):
+        value = item.get(key)
+        if value:
+            return value
+    return None
+
+
+async def _find_item(trip_id: int, day_id: int, item_id: int) -> dict | None:
+    trip = await _load_trip(trip_id)
+    for day in trip.get("days", []):
+        if day["id"] == day_id:
+            for item in day.get("items", []):
+                if item["id"] == item_id:
+                    return item
+    return None
+
+
 def _slim_item(item: dict) -> dict:
     place = item.get("place") or {}
     slim = {
@@ -266,8 +284,9 @@ async def duplicate_day(trip_id: int, source_day_id: int, label: str, date: str 
             item_data["place"] = place["id"]
         if item.get("status"):
             item_data["status"] = item["status"]
-        if item.get("comment"):
-            item_data["comment"] = item["comment"]
+        comment = _item_comment(item)
+        if comment:
+            item_data["comment"] = comment
         created.append(
             await api_post(f"/api/trips/{trip_id}/days/{new_day_id}/items", item_data)
         )
@@ -287,14 +306,17 @@ async def add_item(
     price: float = 0,
     place_id: int = 0,
     comment: str = "",
+    notes: str = "",
 ) -> dict:
-    """Add an item to a day. Place must be linked to trip first."""
+    """Add an item to a day. Use comment (or notes) for extra details. Place must be linked to trip first."""
     data = {"text": text, "time": time, "price": price}
     if place_id:
         data["place"] = place_id
-    if comment:
-        data["comment"] = comment
-    return await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
+    effective_comment = comment or notes
+    if effective_comment:
+        data["comment"] = effective_comment
+    item = await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
+    return _slim_item(item)
 
 
 @mcp.tool()
@@ -311,8 +333,9 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
             data["place"] = item["place_id"]
         if item.get("status"):
             data["status"] = item["status"]
-        if item.get("comment"):
-            data["comment"] = item["comment"]
+        comment = _item_comment(item)
+        if comment:
+            data["comment"] = comment
         created.append(await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data))
     return [_slim_item(i) for i in created]
 
@@ -327,10 +350,11 @@ async def update_item(
     price: float | None = None,
     status: str = "",
     comment: str | None = None,
+    notes: str | None = None,
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update an item. Pass place_id to preserve the place reference (use get_day to retrieve it)."""
+    """Update an item fields (text, time, price, status, comment). Place is preserved automatically."""
     data: dict = {}
     if text:
         data["text"] = text
@@ -340,13 +364,19 @@ async def update_item(
         data["price"] = price
     if status:
         data["status"] = status
-    if comment is not None:
-        data["comment"] = comment
+    effective_comment = comment if comment is not None else notes
+    if effective_comment is not None:
+        data["comment"] = effective_comment
     if remove_place:
         data["place"] = None
     elif place_id is not None:
         data["place"] = place_id
-    return await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
+    else:
+        current = await _find_item(trip_id, day_id, item_id)
+        if current and current.get("place"):
+            data["place"] = current["place"]["id"]
+    item = await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
+    return _slim_item(item)
 
 
 @mcp.tool()
