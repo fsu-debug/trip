@@ -158,6 +158,18 @@ async def _load_trip(trip_id: int) -> dict:
     return await api_get(f"/api/trips/{trip_id}")
 
 
+async def _ensure_place_linked_to_trip(trip_id: int, place_id: int) -> None:
+    """TRIP requires places to be linked to a trip before they can be set on items."""
+    if place_id <= 0:
+        return
+    trip = await _load_trip(trip_id)
+    linked_ids = {place["id"] for place in trip.get("places", [])}
+    if place_id in linked_ids:
+        return
+    await api_put(f"/api/trips/{trip_id}", {"place_ids": [*linked_ids, place_id]})
+    logger.info("linked place %s to trip %s", place_id, trip_id)
+
+
 async def _resolve_category_id(category_name: str | None) -> int:
     categories = await api_get("/api/categories")
     if category_name:
@@ -254,11 +266,9 @@ async def list_trip_places(trip_id: int) -> list:
 @mcp.tool()
 async def add_place_to_trip(trip_id: int, place_id: int) -> dict:
     """Link a place to a trip without removing existing links."""
+    await _ensure_place_linked_to_trip(trip_id, place_id)
     trip = await _load_trip(trip_id)
-    place_ids = [place["id"] for place in trip.get("places", [])]
-    if place_id not in place_ids:
-        place_ids.append(place_id)
-    return await api_put(f"/api/trips/{trip_id}", {"place_ids": place_ids})
+    return {"trip_id": trip_id, "place_ids": [place["id"] for place in trip.get("places", [])]}
 
 
 @mcp.tool()
@@ -377,6 +387,7 @@ async def add_item(
 
     data = {"text": text, "time": _normalize_time(time) or time, "price": price}
     if place_id and place_id > 0:
+        await _ensure_place_linked_to_trip(trip_id, place_id)
         data["place"] = place_id
     effective_comment = comment or notes
     if effective_comment:
@@ -397,6 +408,7 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
             "price": item.get("price", 0),
         }
         if item.get("place_id"):
+            await _ensure_place_linked_to_trip(trip_id, item["place_id"])
             data["place"] = item["place_id"]
         normalized_status = _normalize_status(item.get("status", ""))
         if normalized_status:
@@ -422,7 +434,7 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Status: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Places are auto-linked to the trip when place_id is set. Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
@@ -445,6 +457,7 @@ async def update_item(
     if remove_place:
         data["place"] = None
     elif place_id is not None and place_id > 0:
+        await _ensure_place_linked_to_trip(trip_id, place_id)
         data["place"] = place_id
     elif current.get("place"):
         data["place"] = current["place"]["id"]
