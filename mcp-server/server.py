@@ -63,6 +63,28 @@ def _item_comment(item: dict) -> str | None:
     return None
 
 
+def _resolve_item_comment(
+    comment: str | None = None,
+    notes: str | None = None,
+    description: str | None = None,
+) -> str | None:
+    if comment is not None:
+        return comment
+    if notes is not None:
+        return notes
+    if description is not None:
+        return description
+    return None
+
+
+def _resolve_place_id(place_id: int = 0, place: int = 0) -> int:
+    if place_id > 0:
+        return place_id
+    if place > 0:
+        return place
+    return 0
+
+
 def _normalize_status(status: str) -> str | None:
     if not status:
         return None
@@ -236,7 +258,7 @@ async def _enrich_item_with_place(
     if fill_comment and "comment" not in data:
         new_description = place.get("description")
 
-        if old_place_id is not None and old_place_id != place_id:
+        if old_place_id is not None:
             should_update, new_comment = _comment_for_place_change(
                 existing_comment,
                 old_place_description,
@@ -530,13 +552,36 @@ async def update_item(
     status: str = "",
     comment: str | None = None,
     notes: str | None = None,
-    place_id: int | None = None,
+    description: str | None = None,
+    place_id: int = 0,
+    place: int = 0,
     remove_place: bool = False,
 ) -> dict:
-    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Changing place_id replaces the old place description in comment (including when extra lines were added below it); other custom edits are kept. Status: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update an EXISTING item (requires item_id from get_day). Pass text, time, comment/notes/description, status, or place_id/place. Changing place replaces the old place description in comment unless customized. Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
+
+    resolved_place_id = _resolve_place_id(place_id, place)
+    effective_comment = _resolve_item_comment(comment, notes, description)
+    logger.info(
+        "update_item called: trip=%s day=%s item=%s text=%r time=%r comment=%r notes=%r description=%r "
+        "place_id=%s place=%s resolved_place_id=%s price=%s status=%r remove_place=%s",
+        trip_id,
+        day_id,
+        item_id,
+        text,
+        time,
+        comment,
+        notes,
+        description,
+        place_id,
+        place,
+        resolved_place_id,
+        price,
+        status,
+        remove_place,
+    )
 
     data: dict = {}
     if text:
@@ -549,7 +594,6 @@ async def update_item(
     normalized_status = _normalize_status(status)
     if normalized_status:
         data["status"] = normalized_status
-    effective_comment = comment if comment is not None else notes
     if effective_comment is not None:
         data["comment"] = str(effective_comment)
 
@@ -557,13 +601,13 @@ async def update_item(
         data["place"] = None
         data["lat"] = None
         data["lng"] = None
-    elif place_id is not None and place_id > 0:
+    elif resolved_place_id > 0:
         existing_text = current.get("text", "")
         old_place = current.get("place") or {}
         await _enrich_item_with_place(
             data,
             trip_id,
-            place_id,
+            resolved_place_id,
             text=text or existing_text,
             existing_comment=current.get("comment"),
             old_place_id=old_place.get("id"),
@@ -574,18 +618,13 @@ async def update_item(
         )
 
     if not data:
-        logger.warning(
-            "update_item: no fields to update for trip=%s day=%s item=%s (text=%r time=%r comment=%r notes=%r status=%r)",
-            trip_id,
-            day_id,
-            item_id,
-            text,
-            time,
-            comment,
-            notes,
-            status,
+        raise RuntimeError(
+            f"No fields to update for item {item_id} on day {day_id}. "
+            f"Received text={text!r}, time={time!r}, comment={comment!r}, notes={notes!r}, "
+            f"description={description!r}, place_id={place_id}, place={place}, price={price}, "
+            f"status={status!r}, remove_place={remove_place}. "
+            f"Pass at least one field, e.g. time='09:00', comment='...', or place_id=<id>."
         )
-        raise RuntimeError("No fields to update")
 
     logger.info(
         "update_item: trip=%s day=%s item=%s payload=%s",
