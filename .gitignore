@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local backend runtime (when started from backend/)
+backend/storage/
