@@ -2,10 +2,12 @@
 
 MCP (Model Context Protocol) server for TRIP — lets AI assistants (Claude, OpenClaw, etc.) manage trips via tools.
 
-## Tools (22)
+## Tools (25)
 
-Trips: create, list, get, update, delete, link_places
-Days: add, update, delete
+Trips: create, list, get, get_trip_overview, update, delete, link_places
+Days: list_trip_days, get_day, add, update, delete
+
+For large trips, prefer `get_trip_overview` + `get_day` over `get_trip` (avoids huge responses).
 Items: add, update, delete
 Places: create, list, update, delete
 Categories: list, create

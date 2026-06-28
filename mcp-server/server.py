@@ -4,6 +4,38 @@ from auth import api_get, api_post, api_put, api_delete
 
 mcp = FastMCP("TRIP")
 
+
+def _slim_item(item: dict) -> dict:
+    place = item.get("place") or {}
+    slim = {
+        "id": item.get("id"),
+        "time": item.get("time"),
+        "text": item.get("text"),
+        "price": item.get("price"),
+        "status": item.get("status"),
+        "day_id": item.get("day_id"),
+    }
+    if place:
+        slim["place_id"] = place.get("id")
+        slim["place_name"] = place.get("name")
+    return slim
+
+
+def _slim_day(day: dict, *, with_items: bool) -> dict:
+    slim = {
+        "id": day["id"],
+        "label": day.get("label"),
+        "dt": day.get("dt"),
+        "notes": day.get("notes"),
+    }
+    items = day.get("items", [])
+    if with_items:
+        slim["items"] = [_slim_item(item) for item in items]
+    else:
+        slim["item_count"] = len(items)
+    return slim
+
+
 # ── Trips ──
 
 @mcp.tool()
@@ -18,8 +50,40 @@ async def list_trips() -> list:
 
 @mcp.tool()
 async def get_trip(trip_id: int) -> dict:
-    """Get full trip with days, items, and places."""
+    """Get full trip with days, items, and places. Avoid for large trips — use get_trip_overview and get_day instead."""
     return await api_get(f"/api/trips/{trip_id}")
+
+
+@mcp.tool()
+async def get_trip_overview(trip_id: int) -> dict:
+    """Trip summary with compact day list (no items or place details)."""
+    trip = await api_get(f"/api/trips/{trip_id}")
+    return {
+        "id": trip["id"],
+        "name": trip.get("name"),
+        "currency": trip.get("currency"),
+        "notes": trip.get("notes"),
+        "archived": trip.get("archived"),
+        "days": [_slim_day(day, with_items=False) for day in trip.get("days", [])],
+        "place_count": len(trip.get("places", [])),
+    }
+
+
+@mcp.tool()
+async def list_trip_days(trip_id: int) -> list:
+    """List days of a trip (id, label, date, item count). Use get_day for item details."""
+    trip = await api_get(f"/api/trips/{trip_id}")
+    return [_slim_day(day, with_items=False) for day in trip.get("days", [])]
+
+
+@mcp.tool()
+async def get_day(trip_id: int, day_id: int) -> dict:
+    """Get a single day with compact items. Prefer over get_trip for large trips."""
+    trip = await api_get(f"/api/trips/{trip_id}")
+    for day in trip.get("days", []):
+        if day["id"] == day_id:
+            return _slim_day(day, with_items=True)
+    return {}
 
 @mcp.tool()
 async def update_trip(trip_id: int, name: str = "", currency: str = "", notes: str = "") -> dict:
@@ -49,7 +113,7 @@ async def add_day(trip_id: int, label: str, date: str = "") -> dict:
 
 @mcp.tool()
 async def update_day(trip_id: int, day_id: int, label: str, date: str = "") -> dict:
-    """Update a day. label is required (use get_trip to retrieve the current value if only updating the date)."""
+    """Update a day. label is required (use get_day to retrieve the current value if only updating the date)."""
     data: dict = {"label": label}
     if date: data["dt"] = date
     return await api_put(f"/api/trips/{trip_id}/days/{day_id}", data)
@@ -73,7 +137,7 @@ async def add_item(trip_id: int, day_id: int, text: str, time: str = "09:00",
 async def update_item(trip_id: int, day_id: int, item_id: int, text: str = "", time: str = "",
                       price: float | None = None, status: str = "",
                       place_id: int | None = None, remove_place: bool = False) -> dict:
-    """Update an item. Always pass place_id to preserve the place reference (use get_trip to retrieve it).
+    """Update an item. Always pass place_id to preserve the place reference (use get_day to retrieve it).
     Set remove_place=True to detach the place. Status: pending/booked/constraint/optional."""
     data: dict = {}
     if text: data["text"] = text
