@@ -17,7 +17,7 @@ from .utils.utils import silence_http_logging
 migrate_config_file()
 
 if not Path(get_settings().FRONTEND_FOLDER).is_dir():
-    raise ValueError()
+    raise ValueError(f"Frontend folder not found: {get_settings().FRONTEND_FOLDER}")
 
 Path(get_settings().ASSETS_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(get_settings().ATTACHMENTS_FOLDER).mkdir(parents=True, exist_ok=True)

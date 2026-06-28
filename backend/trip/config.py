@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     DEFAULT_MAP_LAT: float = 48.107
     DEFAULT_MAP_LNG: float = -2.988
 
+    @field_validator("API_TOKEN_LOCAL_ONLY", mode="before")
+    @classmethod
+    def validate_api_token_local_only(cls, value) -> bool:
+        if value == "" or value is None:
+            return True
+        return value
+
     @field_validator("OIDC_CLIENT_SECRET", mode="before")
     @classmethod
     def validate_oidc_secret_client(cls, value: str) -> str:
