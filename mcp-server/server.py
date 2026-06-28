@@ -314,8 +314,9 @@ async def duplicate_day(trip_id: int, source_day_id: int, label: str, date: str 
         place = item.get("place")
         if place:
             item_data["place"] = place["id"]
-        if item.get("status"):
-            item_data["status"] = item["status"]
+        normalized_status = _normalize_status(item.get("status", ""))
+        if normalized_status:
+            item_data["status"] = normalized_status
         comment = _item_comment(item)
         if comment:
             item_data["comment"] = comment
