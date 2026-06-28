@@ -125,6 +125,10 @@ def _slim_item(item: dict) -> dict:
     if place:
         slim["place_id"] = place.get("id")
         slim["place_name"] = place.get("name")
+        slim["place_lat"] = place.get("lat")
+        slim["place_lng"] = place.get("lng")
+    slim["lat"] = item.get("lat")
+    slim["lng"] = item.get("lng")
     return slim
 
 
@@ -168,6 +172,46 @@ async def _ensure_place_linked_to_trip(trip_id: int, place_id: int) -> None:
         return
     await api_put(f"/api/trips/{trip_id}", {"place_ids": [*linked_ids, place_id]})
     logger.info("linked place %s to trip %s", place_id, trip_id)
+
+
+async def _enrich_item_with_place(
+    data: dict,
+    trip_id: int,
+    place_id: int,
+    *,
+    text: str = "",
+    comment: str | None = None,
+    notes: str | None = None,
+    fill_text: bool = True,
+    fill_price: bool = True,
+    fill_comment: bool = True,
+) -> None:
+    """Mirror the frontend place picker: copy coords and optional fields from the place."""
+    await _ensure_place_linked_to_trip(trip_id, place_id)
+    place = await api_get(f"/api/places/{place_id}")
+    if not place:
+        raise RuntimeError(f"Place {place_id} not found")
+
+    data["place"] = place_id
+    data["lat"] = place["lat"]
+    data["lng"] = place["lng"]
+
+    if fill_price:
+        data["price"] = place.get("price") or 0
+
+    if fill_text and not text and not data.get("text") and place.get("name"):
+        data["text"] = place["name"]
+
+    effective_comment = comment if comment is not None else notes
+    if fill_comment and effective_comment is None and "comment" not in data and place.get("description"):
+        data["comment"] = place["description"]
+
+    logger.info(
+        "applied place %s to item payload (lat=%s, lng=%s)",
+        place_id,
+        data["lat"],
+        data["lng"],
+    )
 
 
 async def _resolve_category_id(category_name: str | None) -> int:
@@ -386,12 +430,18 @@ async def add_item(
         )
 
     data = {"text": text, "time": _normalize_time(time) or time, "price": price}
-    if place_id and place_id > 0:
-        await _ensure_place_linked_to_trip(trip_id, place_id)
-        data["place"] = place_id
     effective_comment = comment or notes
     if effective_comment:
         data["comment"] = effective_comment
+    if place_id and place_id > 0:
+        await _enrich_item_with_place(
+            data,
+            trip_id,
+            place_id,
+            text=text,
+            comment=effective_comment or None,
+            fill_price=price == 0,
+        )
     logger.info("add_item: trip=%s day=%s payload=%s", trip_id, day_id, data)
     item = await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
     return _slim_item(item)
@@ -407,15 +457,21 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
             "time": item.get("time", "09:00"),
             "price": item.get("price", 0),
         }
-        if item.get("place_id"):
-            await _ensure_place_linked_to_trip(trip_id, item["place_id"])
-            data["place"] = item["place_id"]
-        normalized_status = _normalize_status(item.get("status", ""))
-        if normalized_status:
-            data["status"] = normalized_status
         comment = _item_comment(item)
         if comment:
             data["comment"] = comment
+        if item.get("place_id"):
+            await _enrich_item_with_place(
+                data,
+                trip_id,
+                item["place_id"],
+                text=item.get("text", ""),
+                comment=comment,
+                fill_price=item.get("price") in (None, 0),
+            )
+        normalized_status = _normalize_status(item.get("status", ""))
+        if normalized_status:
+            data["status"] = normalized_status
         created.append(await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data))
     return [_slim_item(i) for i in created]
 
@@ -456,11 +512,19 @@ async def update_item(
 
     if remove_place:
         data["place"] = None
+        data["lat"] = None
+        data["lng"] = None
     elif place_id is not None and place_id > 0:
-        await _ensure_place_linked_to_trip(trip_id, place_id)
-        data["place"] = place_id
-    elif current.get("place"):
-        data["place"] = current["place"]["id"]
+        await _enrich_item_with_place(
+            data,
+            trip_id,
+            place_id,
+            text=text,
+            comment=effective_comment,
+            fill_text=not text,
+            fill_price=price is None,
+            fill_comment=effective_comment is None,
+        )
 
     if not data:
         logger.warning(
