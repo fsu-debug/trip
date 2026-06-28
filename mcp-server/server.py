@@ -42,6 +42,7 @@ def _slim_item(item: dict) -> dict:
         "id": item.get("id"),
         "time": item.get("time"),
         "text": item.get("text"),
+        "comment": item.get("comment"),
         "price": item.get("price"),
         "status": item.get("status"),
         "day_id": item.get("day_id"),
@@ -265,6 +266,8 @@ async def duplicate_day(trip_id: int, source_day_id: int, label: str, date: str 
             item_data["place"] = place["id"]
         if item.get("status"):
             item_data["status"] = item["status"]
+        if item.get("comment"):
+            item_data["comment"] = item["comment"]
         created.append(
             await api_post(f"/api/trips/{trip_id}/days/{new_day_id}/items", item_data)
         )
@@ -283,17 +286,20 @@ async def add_item(
     time: str = "09:00",
     price: float = 0,
     place_id: int = 0,
+    comment: str = "",
 ) -> dict:
     """Add an item to a day. Place must be linked to trip first."""
     data = {"text": text, "time": time, "price": price}
     if place_id:
         data["place"] = place_id
+    if comment:
+        data["comment"] = comment
     return await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
 
 
 @mcp.tool()
 async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
-    """Add multiple items to a day. Each item: {text, time?, price?, place_id?, status?}."""
+    """Add multiple items to a day. Each item: {text, time?, price?, place_id?, status?, comment?}."""
     created = []
     for item in items:
         data = {
@@ -305,6 +311,8 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
             data["place"] = item["place_id"]
         if item.get("status"):
             data["status"] = item["status"]
+        if item.get("comment"):
+            data["comment"] = item["comment"]
         created.append(await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data))
     return [_slim_item(i) for i in created]
 
@@ -318,6 +326,7 @@ async def update_item(
     time: str = "",
     price: float | None = None,
     status: str = "",
+    comment: str | None = None,
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
@@ -331,6 +340,8 @@ async def update_item(
         data["price"] = price
     if status:
         data["status"] = status
+    if comment is not None:
+        data["comment"] = comment
     if remove_place:
         data["place"] = None
     elif place_id is not None:
