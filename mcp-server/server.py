@@ -107,6 +107,22 @@ async def _find_item(trip_id: int, day_id: int, item_id: int) -> dict | None:
     return None
 
 
+async def _find_item_by_text(trip_id: int, day_id: int, text: str, time: str = "") -> dict | None:
+    normalized_text = text.strip().casefold()
+    normalized_time = _normalize_time(time) if time else None
+    trip = await _load_trip(trip_id)
+    for day in trip.get("days", []):
+        if day["id"] != day_id:
+            continue
+        for item in day.get("items", []):
+            if item.get("text", "").strip().casefold() != normalized_text:
+                continue
+            if normalized_time and item.get("time") != normalized_time:
+                continue
+            return item
+    return None
+
+
 def _slim_item(item: dict) -> dict:
     place = item.get("place") or {}
     slim = {
@@ -362,13 +378,22 @@ async def add_item(
     comment: str = "",
     notes: str = "",
 ) -> dict:
-    """Add an item to a day. Use comment (or notes) for extra details. Place must be linked to trip first."""
-    data = {"text": text, "time": time, "price": price}
-    if place_id:
+    """Create a NEW plan item on a day. Do NOT use to edit existing items — call get_day first, then update_item(item_id=...) or set_item_comment(item_id=...)."""
+    existing = await _find_item_by_text(trip_id, day_id, text, time)
+    if existing:
+        raise RuntimeError(
+            f"Item already exists on day {day_id} (id={existing['id']}, text={existing.get('text')!r}). "
+            f"Use update_item(trip_id={trip_id}, day_id={day_id}, item_id={existing['id']}, ...) "
+            f"or set_item_comment(item_id={existing['id']}, comment=...) instead of add_item."
+        )
+
+    data = {"text": text, "time": _normalize_time(time) or time, "price": price}
+    if place_id and place_id > 0:
         data["place"] = place_id
     effective_comment = comment or notes
     if effective_comment:
         data["comment"] = effective_comment
+    logger.info("add_item: trip=%s day=%s payload=%s", trip_id, day_id, data)
     item = await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
     return _slim_item(item)
 
@@ -409,7 +434,7 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update item via PUT. Status: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
@@ -459,6 +484,26 @@ async def update_item(
     )
     item = await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
     return _slim_item(item)
+
+
+@mcp.tool()
+async def set_item_comment(
+    trip_id: int,
+    day_id: int,
+    item_id: int,
+    comment: str,
+    notes: str = "",
+) -> dict:
+    """Set the comment on an existing plan item. Call get_day first to obtain item_id."""
+    effective_comment = comment or notes
+    if not effective_comment:
+        raise RuntimeError("comment is required")
+    return await update_item(
+        trip_id=trip_id,
+        day_id=day_id,
+        item_id=item_id,
+        comment=effective_comment,
+    )
 
 
 @mcp.tool()
