@@ -1,19 +1,28 @@
 # TRIP MCP Server
 
-MCP (Model Context Protocol) server for TRIP — lets AI assistants (Claude, OpenClaw, etc.) manage trips via tools.
+MCP (Model Context Protocol) server for TRIP — lets AI assistants (Claude, Hermes, etc.) manage trips via tools.
 
-## Tools (25)
+## Tools (48)
 
-Trips: create, list, get, get_trip_overview, update, delete, link_places
-Days: list_trip_days, get_day, add, update, delete
+**Trips:** create, list, get, get_trip_overview, get_trip_balance, update, delete, link_places, list_trip_places, add_place_to_trip, list_trip_members
 
-For large trips, prefer `get_trip_overview` + `get_day` over `get_trip` (avoids huge responses).
-Items: add, update, delete
-Places: create, list, update, delete
-Categories: list, create
-Packing: add_packing_item
-Checklist: add_checklist_item
-Sharing: share_trip, invite_member
+**Days:** list_trip_days, get_day, add, update, delete, duplicate_day
+
+**Items:** add, bulk_add_items, update, delete
+
+**Bookings:** add, update, delete
+
+**Places:** search_places, import_place_from_google, geocode, search_nearby, get_route, create, list, get, update, delete
+
+**Categories:** list, create
+
+**Packing:** list, add, update, delete
+
+**Checklist:** list, add, update, delete
+
+**Sharing:** share_trip, invite_member
+
+For large trips, prefer `get_trip_overview` + `get_day` over `get_trip`. Use `add_place_to_trip` instead of `link_places` to append places safely.
 
 ## Setup
 
@@ -21,7 +30,7 @@ Sharing: share_trip, invite_member
 docker compose up -d
 ```
 
-Environment variables:
+Environment variables (set where the MCP process runs, not in the HTTP client config):
 
 - `TRIP_API_URL` — TRIP backend URL (default: http://localhost:8080)
 - `TRIP_API_TOKEN` — TRIP API key (recommended when OIDC is enabled; generate in TRIP Settings)
@@ -47,4 +56,12 @@ Claude Code (`~/.claude/settings.json`):
     }
   }
 }
+```
+
+Hermes Agent (`mcp_servers` config):
+
+```yaml
+mcp_servers:
+  trip:
+    url: "http://localhost:3001/mcp"
 ```

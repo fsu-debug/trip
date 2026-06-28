@@ -39,10 +39,10 @@ async def get_token():
         return _token
 
 
-async def api_get(path):
+async def api_get(path, params=None):
     token = await get_token()
     async with httpx.AsyncClient(base_url=get_api_url(), timeout=30) as client:
-        r = await client.get(path, headers={"Authorization": f"Bearer {token}"})
+        r = await client.get(path, params=params, headers={"Authorization": f"Bearer {token}"})
         if r.status_code == 404:
             return {}
         r.raise_for_status()

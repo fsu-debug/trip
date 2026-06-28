@@ -1,8 +1,39 @@
 """TRIP MCP Server — manage trips, places, and itineraries via AI tools."""
 from fastmcp import FastMCP
-from auth import api_get, api_post, api_put, api_delete
+from auth import api_delete, api_get, api_post, api_put
 
 mcp = FastMCP("TRIP")
+
+
+# ── Response helpers ──
+
+
+def _slim_place(place: dict) -> dict:
+    category = place.get("category") or {}
+    return {
+        "id": place.get("id"),
+        "name": place.get("name"),
+        "lat": place.get("lat"),
+        "lng": place.get("lng"),
+        "category_id": category.get("id"),
+        "category": category.get("name"),
+        "description": (place.get("description") or "")[:200] or None,
+        "price": place.get("price"),
+        "duration": place.get("duration"),
+        "visited": place.get("visited"),
+    }
+
+
+def _slim_provider_result(result: dict) -> dict:
+    return {
+        "name": result.get("name"),
+        "place": result.get("place"),
+        "category": result.get("category"),
+        "lat": result.get("lat"),
+        "lng": result.get("lng"),
+        "description": (result.get("description") or "")[:200] or None,
+        "price": result.get("price"),
+    }
 
 
 def _slim_item(item: dict) -> dict:
@@ -21,12 +52,23 @@ def _slim_item(item: dict) -> dict:
     return slim
 
 
+def _slim_booking(booking: dict) -> dict:
+    return {
+        "id": booking.get("id"),
+        "type": booking.get("type"),
+        "label": booking.get("label"),
+        "reference": booking.get("reference"),
+        "notes": booking.get("notes"),
+    }
+
+
 def _slim_day(day: dict, *, with_items: bool) -> dict:
     slim = {
         "id": day["id"],
         "label": day.get("label"),
         "dt": day.get("dt"),
         "notes": day.get("notes"),
+        "bookings": [_slim_booking(b) for b in day.get("bookings", [])],
     }
     items = day.get("items", [])
     if with_items:
@@ -36,17 +78,51 @@ def _slim_day(day: dict, *, with_items: bool) -> dict:
     return slim
 
 
+async def _load_trip(trip_id: int) -> dict:
+    return await api_get(f"/api/trips/{trip_id}")
+
+
+async def _resolve_category_id(category_name: str | None) -> int:
+    categories = await api_get("/api/categories")
+    if category_name:
+        for cat in categories:
+            if cat.get("name", "").lower() == category_name.lower():
+                return cat["id"]
+    return categories[0]["id"] if categories else 1
+
+
+async def _create_place_from_result(result: dict, category_name: str = "") -> dict:
+    category_id = await _resolve_category_id(category_name or result.get("category"))
+    data = {
+        "name": result.get("name") or result.get("place") or "Unknown",
+        "lat": result["lat"],
+        "lng": result["lng"],
+        "place": result.get("place") or result.get("name"),
+        "description": result.get("description") or "",
+        "price": result.get("price") or 0,
+        "duration": 60,
+        "category_id": category_id,
+    }
+    if result.get("image"):
+        data["image"] = result["image"]
+    place = await api_post("/api/places", data)
+    return _slim_place(place)
+
+
 # ── Trips ──
+
 
 @mcp.tool()
 async def create_trip(name: str, currency: str = "EUR") -> dict:
     """Create a new trip."""
     return await api_post("/api/trips", {"name": name, "currency": currency})
 
+
 @mcp.tool()
 async def list_trips() -> list:
     """List all trips."""
     return await api_get("/api/trips")
+
 
 @mcp.tool()
 async def get_trip(trip_id: int) -> dict:
@@ -57,7 +133,7 @@ async def get_trip(trip_id: int) -> dict:
 @mcp.tool()
 async def get_trip_overview(trip_id: int) -> dict:
     """Trip summary with compact day list (no items or place details)."""
-    trip = await api_get(f"/api/trips/{trip_id}")
+    trip = await _load_trip(trip_id)
     return {
         "id": trip["id"],
         "name": trip.get("name"),
@@ -71,19 +147,49 @@ async def get_trip_overview(trip_id: int) -> dict:
 
 @mcp.tool()
 async def list_trip_days(trip_id: int) -> list:
-    """List days of a trip (id, label, date, item count). Use get_day for item details."""
-    trip = await api_get(f"/api/trips/{trip_id}")
+    """List days of a trip (id, label, date, item count, bookings). Use get_day for item details."""
+    trip = await _load_trip(trip_id)
     return [_slim_day(day, with_items=False) for day in trip.get("days", [])]
 
 
 @mcp.tool()
 async def get_day(trip_id: int, day_id: int) -> dict:
-    """Get a single day with compact items. Prefer over get_trip for large trips."""
-    trip = await api_get(f"/api/trips/{trip_id}")
+    """Get a single day with compact items and bookings. Prefer over get_trip for large trips."""
+    trip = await _load_trip(trip_id)
     for day in trip.get("days", []):
         if day["id"] == day_id:
             return _slim_day(day, with_items=True)
     return {}
+
+
+@mcp.tool()
+async def get_trip_balance(trip_id: int) -> dict:
+    """Cost balance per trip member (who paid how much vs. fair share). Requires 2+ members."""
+    return await api_get(f"/api/trips/{trip_id}/balance")
+
+
+@mcp.tool()
+async def list_trip_places(trip_id: int) -> list:
+    """List places linked to a trip (compact)."""
+    trip = await _load_trip(trip_id)
+    return [_slim_place(place) for place in trip.get("places", [])]
+
+
+@mcp.tool()
+async def add_place_to_trip(trip_id: int, place_id: int) -> dict:
+    """Link a place to a trip without removing existing links."""
+    trip = await _load_trip(trip_id)
+    place_ids = [place["id"] for place in trip.get("places", [])]
+    if place_id not in place_ids:
+        place_ids.append(place_id)
+    return await api_put(f"/api/trips/{trip_id}", {"place_ids": place_ids})
+
+
+@mcp.tool()
+async def list_trip_members(trip_id: int) -> list:
+    """List collaborators on a trip."""
+    return await api_get(f"/api/trips/{trip_id}/members")
+
 
 @mcp.tool()
 async def update_trip(trip_id: int, name: str = "", currency: str = "", notes: str = "") -> dict:
@@ -91,136 +197,428 @@ async def update_trip(trip_id: int, name: str = "", currency: str = "", notes: s
     data = {k: v for k, v in {"name": name, "currency": currency, "notes": notes}.items() if v}
     return await api_put(f"/api/trips/{trip_id}", data)
 
+
 @mcp.tool()
 async def delete_trip(trip_id: int) -> dict:
     """Delete a trip."""
     return await api_delete(f"/api/trips/{trip_id}")
 
+
 @mcp.tool()
 async def link_places(trip_id: int, place_ids: list[int]) -> dict:
-    """Replace the full set of places linked to a trip. Existing links not in place_ids are removed.
-    Must be called before adding items with place references."""
+    """Replace the full set of places linked to a trip. Prefer add_place_to_trip to append a single place."""
     return await api_put(f"/api/trips/{trip_id}", {"place_ids": place_ids})
 
+
 # ── Days ──
+
 
 @mcp.tool()
 async def add_day(trip_id: int, label: str, date: str = "") -> dict:
     """Add a day. Date: YYYY-MM-DD."""
     data = {"label": label}
-    if date: data["dt"] = date
+    if date:
+        data["dt"] = date
     return await api_post(f"/api/trips/{trip_id}/days", data)
 
+
 @mcp.tool()
-async def update_day(trip_id: int, day_id: int, label: str, date: str = "") -> dict:
-    """Update a day. label is required (use get_day to retrieve the current value if only updating the date)."""
+async def update_day(trip_id: int, day_id: int, label: str, date: str = "", notes: str = "") -> dict:
+    """Update a day. label is required (use get_day to retrieve current values)."""
     data: dict = {"label": label}
-    if date: data["dt"] = date
+    if date:
+        data["dt"] = date
+    if notes:
+        data["notes"] = notes
     return await api_put(f"/api/trips/{trip_id}/days/{day_id}", data)
+
 
 @mcp.tool()
 async def delete_day(trip_id: int, day_id: int) -> dict:
     """Delete a day."""
     return await api_delete(f"/api/trips/{trip_id}/days/{day_id}")
 
+
+@mcp.tool()
+async def duplicate_day(trip_id: int, source_day_id: int, label: str, date: str = "") -> dict:
+    """Copy a day and all its items to a new day."""
+    trip = await _load_trip(trip_id)
+    source = next((day for day in trip.get("days", []) if day["id"] == source_day_id), None)
+    if not source:
+        return {}
+
+    day_data = {"label": label}
+    if date:
+        day_data["dt"] = date
+    new_day = await api_post(f"/api/trips/{trip_id}/days", day_data)
+    new_day_id = new_day["id"]
+
+    created = []
+    for item in source.get("items", []):
+        item_data = {
+            "text": item.get("text", ""),
+            "time": item.get("time", "09:00"),
+            "price": item.get("price") or 0,
+        }
+        place = item.get("place")
+        if place:
+            item_data["place"] = place["id"]
+        if item.get("status"):
+            item_data["status"] = item["status"]
+        created.append(
+            await api_post(f"/api/trips/{trip_id}/days/{new_day_id}/items", item_data)
+        )
+
+    return {"day": new_day, "items": [_slim_item(i) for i in created]}
+
+
 # ── Items ──
 
-@mcp.tool()
-async def add_item(trip_id: int, day_id: int, text: str, time: str = "09:00",
-                   price: float = 0, place_id: int = 0) -> dict:
-    """Add an item to a day. Field is 'place' not 'place_id'. Place must be linked to trip first."""
-    data = {"text": text, "time": time, "price": price}
-    if place_id: data["place"] = place_id
-    return await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
 
 @mcp.tool()
-async def update_item(trip_id: int, day_id: int, item_id: int, text: str = "", time: str = "",
-                      price: float | None = None, status: str = "",
-                      place_id: int | None = None, remove_place: bool = False) -> dict:
-    """Update an item. Always pass place_id to preserve the place reference (use get_day to retrieve it).
-    Set remove_place=True to detach the place. Status: pending/booked/constraint/optional."""
+async def add_item(
+    trip_id: int,
+    day_id: int,
+    text: str,
+    time: str = "09:00",
+    price: float = 0,
+    place_id: int = 0,
+) -> dict:
+    """Add an item to a day. Place must be linked to trip first."""
+    data = {"text": text, "time": time, "price": price}
+    if place_id:
+        data["place"] = place_id
+    return await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
+
+
+@mcp.tool()
+async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
+    """Add multiple items to a day. Each item: {text, time?, price?, place_id?, status?}."""
+    created = []
+    for item in items:
+        data = {
+            "text": item["text"],
+            "time": item.get("time", "09:00"),
+            "price": item.get("price", 0),
+        }
+        if item.get("place_id"):
+            data["place"] = item["place_id"]
+        if item.get("status"):
+            data["status"] = item["status"]
+        created.append(await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data))
+    return [_slim_item(i) for i in created]
+
+
+@mcp.tool()
+async def update_item(
+    trip_id: int,
+    day_id: int,
+    item_id: int,
+    text: str = "",
+    time: str = "",
+    price: float | None = None,
+    status: str = "",
+    place_id: int | None = None,
+    remove_place: bool = False,
+) -> dict:
+    """Update an item. Pass place_id to preserve the place reference (use get_day to retrieve it)."""
     data: dict = {}
-    if text: data["text"] = text
-    if time: data["time"] = time
-    if price is not None: data["price"] = price
-    if status: data["status"] = status
+    if text:
+        data["text"] = text
+    if time:
+        data["time"] = time
+    if price is not None:
+        data["price"] = price
+    if status:
+        data["status"] = status
     if remove_place:
         data["place"] = None
     elif place_id is not None:
         data["place"] = place_id
     return await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
 
+
 @mcp.tool()
 async def delete_item(trip_id: int, day_id: int, item_id: int) -> dict:
     """Delete an item."""
     return await api_delete(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}")
 
-# ── Places ──
+
+# ── Bookings ──
+
 
 @mcp.tool()
-async def create_place(name: str, lat: float, lng: float, category_id: int = 1,
-                       description: str = "", price: float = 0, duration: int = 60,
-                       image_url: str = "") -> dict:
+async def add_booking(
+    trip_id: int,
+    day_id: int,
+    label: str,
+    booking_type: str = "generic",
+    reference: str = "",
+    notes: str = "",
+) -> dict:
+    """Add a booking to a day. Types: flight, car, hotel, activity, generic."""
+    data = {"label": label, "type": booking_type}
+    if reference:
+        data["reference"] = reference
+    if notes:
+        data["notes"] = notes
+    return await api_post(f"/api/trips/{trip_id}/days/{day_id}/bookings", data)
+
+
+@mcp.tool()
+async def update_booking(
+    booking_id: int,
+    label: str = "",
+    booking_type: str = "",
+    reference: str = "",
+    notes: str = "",
+    trip_id: int = 0,
+    day_id: int = 0,
+) -> dict:
+    """Update a booking. Pass trip_id+day_id to merge with existing values for partial updates."""
+    current = {"label": "Booking", "type": "generic", "reference": None, "notes": None}
+    if trip_id and day_id:
+        trip = await _load_trip(trip_id)
+        for day in trip.get("days", []):
+            if day["id"] == day_id:
+                for booking in day.get("bookings", []):
+                    if booking["id"] == booking_id:
+                        current = booking
+                        break
+    data = {
+        "label": label or current.get("label"),
+        "type": booking_type or current.get("type", "generic"),
+        "reference": reference or current.get("reference"),
+        "notes": notes or current.get("notes"),
+    }
+    return await api_put(f"/api/bookings/{booking_id}", data)
+
+
+@mcp.tool()
+async def delete_booking(booking_id: int) -> dict:
+    """Delete a booking."""
+    return await api_delete(f"/api/bookings/{booking_id}")
+
+
+# ── Places ──
+
+
+@mcp.tool()
+async def search_places(query: str) -> list:
+    """Search for places via map provider (text query). Returns compact results, not yet saved."""
+    results = await api_get("/api/completions/search", params={"q": query})
+    return [_slim_provider_result(r) for r in results]
+
+
+@mcp.tool()
+async def import_place_from_google(query_or_url: str, category: str = "") -> dict:
+    """Resolve a Google Maps URL or search query and create a place."""
+    results = await api_post("/api/completions/bulk", [query_or_url])
+    if not results:
+        return {}
+    return await _create_place_from_result(results[0], category)
+
+
+@mcp.tool()
+async def geocode(query: str) -> dict:
+    """Geocode an address or place name to map boundaries."""
+    return await api_get("/api/completions/geocode", params={"q": query})
+
+
+@mcp.tool()
+async def search_nearby(latitude: float, longitude: float) -> list:
+    """Search for nearby places at coordinates."""
+    results = await api_post("/api/completions/nearby", {"latitude": latitude, "longitude": longitude})
+    return [_slim_provider_result(r) for r in results]
+
+
+@mcp.tool()
+async def get_route(
+    from_lat: float,
+    from_lng: float,
+    to_lat: float,
+    to_lng: float,
+    profile: str = "car",
+) -> dict:
+    """Get route between two points. Profiles: car, foot, bike (transit if Google API key set)."""
+    data = {
+        "coordinates": [{"lat": from_lat, "lng": from_lng}, {"lat": to_lat, "lng": to_lng}],
+        "profile": profile,
+    }
+    return await api_post("/api/completions/route", data)
+
+
+@mcp.tool()
+async def create_place(
+    name: str,
+    lat: float,
+    lng: float,
+    category_id: int = 1,
+    description: str = "",
+    price: float = 0,
+    duration: int = 60,
+    image_url: str = "",
+) -> dict:
     """Create a place. Pass image_url for a photo (server downloads automatically)."""
-    data = {"name": name, "lat": lat, "lng": lng, "place": name,
-            "description": description, "price": price, "duration": duration,
-            "category_id": category_id}
-    if image_url: data["image"] = image_url
-    return await api_post("/api/places", data)
+    data = {
+        "name": name,
+        "lat": lat,
+        "lng": lng,
+        "place": name,
+        "description": description,
+        "price": price,
+        "duration": duration,
+        "category_id": category_id,
+    }
+    if image_url:
+        data["image"] = image_url
+    place = await api_post("/api/places", data)
+    return _slim_place(place)
+
 
 @mcp.tool()
 async def list_places() -> list:
-    """List all places."""
-    return await api_get("/api/places")
+    """List all places (compact). Use get_place for full details."""
+    places = await api_get("/api/places")
+    return [_slim_place(place) for place in places]
+
+
+@mcp.tool()
+async def get_place(place_id: int) -> dict:
+    """Get a single place with details (no GPX data)."""
+    place = await api_get(f"/api/places/{place_id}")
+    slim = _slim_place(place)
+    if place.get("description") and len(place["description"]) > 200:
+        slim["description"] = place["description"]
+    slim["links"] = place.get("links")
+    slim["allowdog"] = place.get("allowdog")
+    slim["restroom"] = place.get("restroom")
+    return slim
+
 
 @mcp.tool()
 async def update_place(place_id: int, name: str = "", description: str = "") -> dict:
     """Update a place."""
     data = {}
-    if name: data["name"] = name
-    if description: data["description"] = description
-    return await api_put(f"/api/places/{place_id}", data)
+    if name:
+        data["name"] = name
+    if description:
+        data["description"] = description
+    place = await api_put(f"/api/places/{place_id}", data)
+    return _slim_place(place)
+
 
 @mcp.tool()
 async def delete_place(place_id: int) -> dict:
     """Delete a place."""
     return await api_delete(f"/api/places/{place_id}")
 
+
 # ── Categories ──
+
 
 @mcp.tool()
 async def list_categories() -> list:
     """List place categories."""
     return await api_get("/api/categories")
 
+
 @mcp.tool()
 async def create_category(name: str, color: str = "#3B82F6") -> dict:
     """Create a category."""
     return await api_post("/api/categories", {"name": name, "color": color})
 
+
 # ── Packing & Checklist ──
+
+
+@mcp.tool()
+async def list_packing(trip_id: int) -> list:
+    """List packing items for a trip."""
+    return await api_get(f"/api/trips/{trip_id}/packing")
+
 
 @mcp.tool()
 async def add_packing_item(trip_id: int, text: str, category: str = "other", quantity: int = 1) -> dict:
     """Add packing item. Categories: clothes, toiletries, tech, documents, other."""
-    return await api_post(f"/api/trips/{trip_id}/packing", {"text": text, "category": category, "qt": quantity})
+    return await api_post(
+        f"/api/trips/{trip_id}/packing", {"text": text, "category": category, "qt": quantity}
+    )
+
+
+@mcp.tool()
+async def update_packing_item(
+    trip_id: int,
+    item_id: int,
+    text: str = "",
+    category: str = "",
+    quantity: int | None = None,
+    packed: bool | None = None,
+) -> dict:
+    """Update a packing list item."""
+    data = {}
+    if text:
+        data["text"] = text
+    if category:
+        data["category"] = category
+    if quantity is not None:
+        data["qt"] = quantity
+    if packed is not None:
+        data["packed"] = packed
+    return await api_put(f"/api/trips/{trip_id}/packing/{item_id}", data)
+
+
+@mcp.tool()
+async def delete_packing_item(trip_id: int, item_id: int) -> dict:
+    """Delete a packing list item."""
+    return await api_delete(f"/api/trips/{trip_id}/packing/{item_id}")
+
+
+@mcp.tool()
+async def list_checklist(trip_id: int) -> list:
+    """List pre-trip checklist items."""
+    return await api_get(f"/api/trips/{trip_id}/checklist")
+
 
 @mcp.tool()
 async def add_checklist_item(trip_id: int, text: str) -> dict:
     """Add pre-trip checklist item."""
     return await api_post(f"/api/trips/{trip_id}/checklist", {"text": text})
 
+
+@mcp.tool()
+async def update_checklist_item(
+    trip_id: int, item_id: int, text: str = "", checked: bool | None = None
+) -> dict:
+    """Update a checklist item (text or checked status)."""
+    data = {}
+    if text:
+        data["text"] = text
+    if checked is not None:
+        data["checked"] = checked
+    return await api_put(f"/api/trips/{trip_id}/checklist/{item_id}", data)
+
+
+@mcp.tool()
+async def delete_checklist_item(trip_id: int, item_id: int) -> dict:
+    """Delete a checklist item."""
+    return await api_delete(f"/api/trips/{trip_id}/checklist/{item_id}")
+
+
 # ── Sharing ──
+
 
 @mcp.tool()
 async def share_trip(trip_id: int, full_access: bool = False) -> dict:
     """Create a share link. full_access=True allows editing."""
     return await api_post(f"/api/trips/{trip_id}/share", {"is_full_access": full_access})
 
+
 @mcp.tool()
 async def invite_member(trip_id: int, username: str) -> dict:
     """Invite a user to collaborate."""
     return await api_post(f"/api/trips/{trip_id}/members", {"user": username})
+
 
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=3001)
