@@ -46,7 +46,9 @@ Logs go to stdout — view them with Docker:
 docker logs -f <mcp-container>
 ```
 
-Set `TRIP_MCP_LOG_LEVEL=DEBUG` to see MCP protocol payloads, HTTP details, tool arguments, and API request bodies.
+Set `TRIP_MCP_LOG_LEVEL=DEBUG` to see HTTP details, tool arguments, and API request bodies.
+
+On startup you should see `registered 47 MCP tools`. When Hermes connects, look for `MCP request: tools/list` and `tools/list -> 47 tools` in the logs. An empty `prompts/list` response is normal (this server has no prompts). After MCP updates, run `/reload-mcp` in Hermes.
 
 When OIDC is configured, password login is disabled on the TRIP backend. Use `TRIP_API_TOKEN` instead:
 

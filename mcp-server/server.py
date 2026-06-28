@@ -1,11 +1,8 @@
 """TRIP MCP Server — manage trips, places, and itineraries via AI tools."""
+import asyncio
 import logging
-import os
 
 from fastmcp import FastMCP
-from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
-from fastmcp.server.middleware.logging import LoggingMiddleware
-from fastmcp.server.middleware.timing import TimingMiddleware
 
 from auth import api_delete, api_get, api_post, api_put
 from log_config import TripToolLoggingMiddleware, log_startup_config, setup_logging
@@ -14,15 +11,6 @@ setup_logging()
 logger = logging.getLogger("trip.mcp")
 
 mcp = FastMCP("TRIP")
-mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True))
-mcp.add_middleware(TimingMiddleware())
-mcp.add_middleware(
-    LoggingMiddleware(
-        include_payloads=os.environ.get("TRIP_MCP_LOG_LEVEL", "INFO").upper() == "DEBUG",
-        max_payload_length=1000,
-        logger=logging.getLogger("trip.mcp.protocol"),
-    )
-)
 mcp.add_middleware(TripToolLoggingMiddleware())
 
 
@@ -790,5 +778,7 @@ async def invite_member(trip_id: int, username: str) -> dict:
 
 if __name__ == "__main__":
     log_startup_config()
+    tool_count = len(asyncio.run(mcp.list_tools()))
+    logger.info("registered %d MCP tools", tool_count)
     logger.info("listening on http://0.0.0.0:3001/mcp")
     mcp.run(transport="http", host="0.0.0.0", port=3001)

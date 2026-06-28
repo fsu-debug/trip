@@ -56,10 +56,31 @@ def log_startup_config() -> None:
 
 
 class TripToolLoggingMiddleware(Middleware):
-    """Log MCP tool calls, arguments, timing, and errors."""
+    """Log MCP requests, tool listings, tool calls, and errors."""
 
     def __init__(self) -> None:
         self.logger = logging.getLogger("trip.mcp.tools")
+
+    async def on_request(self, context: MiddlewareContext, call_next):
+        self.logger.info("MCP request: %s", context.method)
+        try:
+            return await call_next(context)
+        except Exception as exc:
+            self.logger.error(
+                "MCP request failed: %s %s: %s",
+                context.method,
+                type(exc).__name__,
+                exc,
+            )
+            if self.logger.isEnabledFor(logging.DEBUG):
+                self.logger.debug(traceback.format_exc())
+            raise
+
+    async def on_list_tools(self, context: MiddlewareContext, call_next):
+        tools = await call_next(context)
+        names = [tool.name for tool in tools]
+        self.logger.info("tools/list -> %d tools: %s", len(names), ", ".join(names))
+        return tools
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         tool_name = context.message.name
