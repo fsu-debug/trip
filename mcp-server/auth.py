@@ -49,11 +49,23 @@ async def api_get(path, params=None):
         return r.json()
 
 
+def _api_error_message(response: httpx.Response, method: str, path: str, data=None) -> str:
+    try:
+        detail = response.json().get("detail", response.text)
+    except Exception:
+        detail = response.text
+    message = f"TRIP API {response.status_code} on {method} {path}: {detail}"
+    if data is not None:
+        message += f" | payload={data}"
+    return message
+
+
 async def api_post(path, data):
     token = await get_token()
     async with httpx.AsyncClient(base_url=get_api_url(), timeout=30) as client:
         r = await client.post(path, json=data, headers={"Authorization": f"Bearer {token}"})
-        r.raise_for_status()
+        if r.is_error:
+            raise RuntimeError(_api_error_message(r, "POST", path, data))
         return r.json()
 
 
@@ -61,7 +73,8 @@ async def api_put(path, data):
     token = await get_token()
     async with httpx.AsyncClient(base_url=get_api_url(), timeout=30) as client:
         r = await client.put(path, json=data, headers={"Authorization": f"Bearer {token}"})
-        r.raise_for_status()
+        if r.is_error:
+            raise RuntimeError(_api_error_message(r, "PUT", path, data))
         return r.json()
 
 

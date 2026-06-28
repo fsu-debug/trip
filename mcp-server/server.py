@@ -36,12 +36,44 @@ def _slim_provider_result(result: dict) -> dict:
     }
 
 
+VALID_ITEM_STATUSES = {"pending", "booked", "constraint", "optional"}
+STATUS_ALIASES = {
+    "confirmed": "booked",
+    "booked": "booked",
+    "pending": "pending",
+    "constraint": "constraint",
+    "optional": "optional",
+}
+
+
 def _item_comment(item: dict) -> str | None:
     for key in ("comment", "notes", "description", "remarks"):
         value = item.get(key)
         if value:
-            return value
+            return str(value)
     return None
+
+
+def _normalize_status(status: str) -> str | None:
+    if not status:
+        return None
+    normalized = STATUS_ALIASES.get(status.lower().strip())
+    if normalized in VALID_ITEM_STATUSES:
+        return normalized
+    return None
+
+
+def _normalize_time(time: str) -> str | None:
+    if not time:
+        return None
+    time = time.strip()
+    if len(time) == 1:
+        return f"0{time}:00"
+    if len(time) == 2 and time.isdigit():
+        return f"{time}:00"
+    if ":" not in time and time.isdigit():
+        return f"{time.zfill(2)}:00"
+    return time
 
 
 async def _find_item(trip_id: int, day_id: int, item_id: int) -> dict | None:
@@ -331,8 +363,9 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
         }
         if item.get("place_id"):
             data["place"] = item["place_id"]
-        if item.get("status"):
-            data["status"] = item["status"]
+        normalized_status = _normalize_status(item.get("status", ""))
+        if normalized_status:
+            data["status"] = normalized_status
         comment = _item_comment(item)
         if comment:
             data["comment"] = comment
@@ -354,27 +387,40 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update an item fields (text, time, price, status, comment). Place is preserved automatically."""
-    data: dict = {}
-    if text:
-        data["text"] = text
-    if time:
-        data["time"] = time
+    """Update item fields. Status values: pending, booked, constraint, optional (booked=confirmed)."""
+    current = await _find_item(trip_id, day_id, item_id)
+    if not current:
+        raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
+
+    data: dict = {"text": text or current.get("text")}
+    normalized_time = _normalize_time(time) or current.get("time")
+    if normalized_time:
+        data["time"] = normalized_time
+
     if price is not None:
         data["price"] = price
-    if status:
-        data["status"] = status
+    elif current.get("price") is not None:
+        data["price"] = current.get("price")
+
+    normalized_status = _normalize_status(status)
+    if normalized_status:
+        data["status"] = normalized_status
+    elif current.get("status"):
+        data["status"] = current.get("status")
+
     effective_comment = comment if comment is not None else notes
     if effective_comment is not None:
-        data["comment"] = effective_comment
+        data["comment"] = str(effective_comment)
+    elif current.get("comment") is not None:
+        data["comment"] = current.get("comment")
+
     if remove_place:
         data["place"] = None
-    elif place_id is not None:
+    elif place_id is not None and place_id > 0:
         data["place"] = place_id
-    else:
-        current = await _find_item(trip_id, day_id, item_id)
-        if current and current.get("place"):
-            data["place"] = current["place"]["id"]
+    elif current.get("place"):
+        data["place"] = current["place"]["id"]
+
     item = await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
     return _slim_item(item)
 
