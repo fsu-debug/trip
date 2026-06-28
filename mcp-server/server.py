@@ -180,8 +180,9 @@ async def _enrich_item_with_place(
     place_id: int,
     *,
     text: str = "",
-    comment: str | None = None,
-    notes: str | None = None,
+    existing_comment: str | None = None,
+    old_place_id: int | None = None,
+    old_place_description: str | None = None,
     fill_text: bool = True,
     fill_price: bool = True,
     fill_comment: bool = True,
@@ -202,9 +203,17 @@ async def _enrich_item_with_place(
     if fill_text and not text and not data.get("text") and place.get("name"):
         data["text"] = place["name"]
 
-    effective_comment = comment if comment is not None else notes
-    if fill_comment and effective_comment is None and "comment" not in data and place.get("description"):
-        data["comment"] = place["description"]
+    if fill_comment and "comment" not in data:
+        current_comment = (existing_comment or "").strip()
+        old_description = (old_place_description or "").strip()
+        new_description = place.get("description")
+
+        if old_place_id is not None and old_place_id != place_id:
+            # Place change: adopt new description unless the comment was customized.
+            if not current_comment or current_comment == old_description:
+                data["comment"] = new_description
+        elif not current_comment and new_description:
+            data["comment"] = new_description
 
     logger.info(
         "applied place %s to item payload (lat=%s, lng=%s)",
@@ -439,8 +448,9 @@ async def add_item(
             trip_id,
             place_id,
             text=text,
-            comment=effective_comment or None,
+            existing_comment=effective_comment or None,
             fill_price=price == 0,
+            fill_comment=not effective_comment,
         )
     logger.info("add_item: trip=%s day=%s payload=%s", trip_id, day_id, data)
     item = await api_post(f"/api/trips/{trip_id}/days/{day_id}/items", data)
@@ -466,8 +476,9 @@ async def bulk_add_items(trip_id: int, day_id: int, items: list[dict]) -> list:
                 trip_id,
                 item["place_id"],
                 text=item.get("text", ""),
-                comment=comment,
+                existing_comment=comment,
                 fill_price=item.get("price") in (None, 0),
+                fill_comment=not comment,
             )
         normalized_status = _normalize_status(item.get("status", ""))
         if normalized_status:
@@ -490,7 +501,7 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Places are auto-linked to the trip when place_id is set. Status: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Changing place_id copies the new place description into comment unless the current comment was customized (differs from the old place description). Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
@@ -516,12 +527,15 @@ async def update_item(
         data["lng"] = None
     elif place_id is not None and place_id > 0:
         existing_text = current.get("text", "")
+        old_place = current.get("place") or {}
         await _enrich_item_with_place(
             data,
             trip_id,
             place_id,
             text=text or existing_text,
-            comment=effective_comment if effective_comment is not None else current.get("comment"),
+            existing_comment=current.get("comment"),
+            old_place_id=old_place.get("id"),
+            old_place_description=old_place.get("description"),
             fill_text=not text,
             fill_price=price is None,
             fill_comment=effective_comment is None,
