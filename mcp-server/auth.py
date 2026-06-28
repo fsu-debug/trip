@@ -15,10 +15,21 @@ async def get_token():
     global _token, _token_expires
     if _token and time.time() < _token_expires:
         return _token
+
+    api_token = os.environ.get("TRIP_API_TOKEN", "")
+    if api_token:
+        async with httpx.AsyncClient(base_url=get_api_url()) as client:
+            r = await client.post("/api/by_token/login", headers={"X-Api-Token": api_token})
+            r.raise_for_status()
+            data = r.json()
+            _token = data["access_token"]
+            _token_expires = time.time() + 25 * 60
+            return _token
+
     username = os.environ.get("TRIP_USERNAME", "")
     password = os.environ.get("TRIP_PASSWORD", "")
     if not username or not password:
-        raise RuntimeError("TRIP_USERNAME and TRIP_PASSWORD env vars required")
+        raise RuntimeError("TRIP_API_TOKEN or TRIP_USERNAME and TRIP_PASSWORD env vars required")
     async with httpx.AsyncClient(base_url=get_api_url()) as client:
         r = await client.post("/api/auth/login", json={"username": username, "password": password})
         r.raise_for_status()

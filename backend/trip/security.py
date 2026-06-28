@@ -1,11 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address, ip_network
 
 import jwt
 import pyotp
 from argon2 import PasswordHasher
 from argon2 import exceptions as argon_exceptions
 from authlib.integrations.httpx_client import OAuth2Client
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from sqlmodel import Session, select
 
 from .config import get_settings
@@ -14,6 +15,7 @@ from .utils.utils import httpx_get
 
 ph = PasswordHasher()
 OIDC_CONFIG = {}
+DEFAULT_API_TOKEN_CIDRS = ("127.0.0.0/8", "::1/128", "172.16.0.0/12", "10.0.0.0/8")
 
 
 def generate_totp_secret() -> str:
@@ -66,6 +68,29 @@ def verify_exists_and_owns(username: str, obj) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     return None
+
+
+def verify_api_token_client(request: Request) -> None:
+    if not get_settings().API_TOKEN_LOCAL_ONLY:
+        return
+
+    client_host = request.client.host if request.client else None
+    if not client_host:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    allowed_cidrs = get_settings().API_TOKEN_ALLOWED_CIDRS
+    if allowed_cidrs:
+        networks = [ip_network(cidr.strip()) for cidr in allowed_cidrs.split(",") if cidr.strip()]
+    else:
+        networks = [ip_network(cidr) for cidr in DEFAULT_API_TOKEN_CIDRS]
+
+    try:
+        addr = ip_address(client_host)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not any(addr in network for network in networks):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def api_token_to_user(session: Session, api_token: str) -> User | None:

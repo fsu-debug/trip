@@ -1,14 +1,14 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from sqlmodel import select
 
 from ..config import get_settings
 from ..deps import SessionDep
 from ..models.models import (Category, CategoryRead, Image, Place, PlaceCreate,
-                             PlaceRead, TokenGoogleSearch, TokenPlaceCreate)
-from ..security import api_token_to_user
+                             PlaceRead, Token, TokenGoogleSearch, TokenPlaceCreate)
+from ..security import api_token_to_user, create_tokens, verify_api_token_client
 from ..utils.utils import (b64img_decode, download_file, patch_image,
                            remove_image, save_image_to_file)
 from .places import create_place
@@ -18,6 +18,17 @@ router = APIRouter(prefix="/api/by_token", tags=["by_token"])
 
 
 logger = logging.getLogger(__name__)
+
+
+@router.post("/login", response_model=Token)
+def token_login(
+    request: Request,
+    session: SessionDep,
+    X_Api_Token: Annotated[str | None, Header()] = None,
+) -> Token:
+    verify_api_token_client(request)
+    user = api_token_to_user(session, X_Api_Token)
+    return create_tokens(data={"sub": user.username})
 
 
 @router.post("/place", response_model=PlaceRead)

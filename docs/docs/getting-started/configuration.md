@@ -102,6 +102,17 @@ OIDC_REDIRECT_URI="https://trip.yourdomain.lan/auth"
 If you have an error, please check the [Troubleshooting](#troubleshooting) section
 :::
 
+### API token access
+
+API key login (`POST /api/by_token/login`) can be restricted to local/private networks:
+
+```yaml title="storage/config.env"
+API_TOKEN_LOCAL_ONLY=true
+API_TOKEN_ALLOWED_CIDRS=127.0.0.0/8,::1/128,172.16.0.0/12
+```
+
+Set `API_TOKEN_LOCAL_ONLY=false` to allow API key login from any IP.
+
 ### Disable registration
 
 The key `REGISTER_ENABLE` can be configured to `false` to disable registration.

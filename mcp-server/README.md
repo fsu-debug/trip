@@ -22,8 +22,15 @@ docker compose up -d
 Environment variables:
 
 - `TRIP_API_URL` — TRIP backend URL (default: http://localhost:8080)
-- `TRIP_USERNAME` — Login username
-- `TRIP_PASSWORD` — Login password
+- `TRIP_API_TOKEN` — TRIP API key (recommended when OIDC is enabled; generate in TRIP Settings)
+- `TRIP_USERNAME` — Login username (fallback when `TRIP_API_TOKEN` is not set)
+- `TRIP_PASSWORD` — Login password (fallback when `TRIP_API_TOKEN` is not set)
+
+When OIDC is configured, password login is disabled on the TRIP backend. Use `TRIP_API_TOKEN` instead:
+
+1. Log in to TRIP via the browser (OIDC)
+2. Open Settings and generate an API key
+3. Configure the MCP server with `TRIP_API_TOKEN`
 
 ## Connect
 
