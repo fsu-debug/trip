@@ -730,13 +730,38 @@ async def get_place(place_id: int) -> dict:
 
 
 @mcp.tool()
-async def update_place(place_id: int, name: str = "", description: str = "") -> dict:
-    """Update a place."""
-    data = {}
+async def update_place(
+    place_id: int,
+    name: str = "",
+    description: str = "",
+    category_id: int | None = None,
+    category: str = "",
+    lat: float | None = None,
+    lng: float | None = None,
+    price: float | None = None,
+    duration: int | None = None,
+) -> dict:
+    """Update a place. Use category_id or category (name) to change its category."""
+    data: dict = {}
     if name:
         data["name"] = name
     if description:
         data["description"] = description
+    if category_id is not None and category_id > 0:
+        data["category_id"] = category_id
+    elif category:
+        data["category_id"] = await _resolve_category_id(category)
+    if lat is not None:
+        data["lat"] = lat
+    if lng is not None:
+        data["lng"] = lng
+    if price is not None:
+        data["price"] = price
+    if duration is not None:
+        data["duration"] = duration
+    if not data:
+        raise RuntimeError("No fields to update")
+    logger.info("update_place: id=%s payload=%s", place_id, data)
     place = await api_put(f"/api/places/{place_id}", data)
     return _slim_place(place)
 
