@@ -437,6 +437,7 @@ def create_tripitem(
 
 
 @router.put("/{trip_id}/days/{day_id}/items/{item_id}", response_model=TripItemRead)
+@router.patch("/{trip_id}/days/{day_id}/items/{item_id}", response_model=TripItemRead)
 def update_tripitem(
     item: TripItemUpdate,
     trip_id: int,

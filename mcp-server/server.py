@@ -388,32 +388,25 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update item fields. Status values: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update item via PUT. Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
 
-    data: dict = {"text": text or current.get("text")}
-    normalized_time = _normalize_time(time) or current.get("time")
+    data: dict = {}
+    if text:
+        data["text"] = text
+    normalized_time = _normalize_time(time)
     if normalized_time:
         data["time"] = normalized_time
-
     if price is not None:
         data["price"] = price
-    elif current.get("price") is not None:
-        data["price"] = current.get("price")
-
     normalized_status = _normalize_status(status)
     if normalized_status:
         data["status"] = normalized_status
-    elif current.get("status"):
-        data["status"] = current.get("status")
-
     effective_comment = comment if comment is not None else notes
     if effective_comment is not None:
         data["comment"] = str(effective_comment)
-    elif current.get("comment") is not None:
-        data["comment"] = current.get("comment")
 
     if remove_place:
         data["place"] = None
@@ -421,6 +414,9 @@ async def update_item(
         data["place"] = place_id
     elif current.get("place"):
         data["place"] = current["place"]["id"]
+
+    if not data:
+        raise RuntimeError("No fields to update")
 
     item = await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
     return _slim_item(item)
