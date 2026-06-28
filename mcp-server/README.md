@@ -36,6 +36,17 @@ Environment variables (set where the MCP process runs, not in the HTTP client co
 - `TRIP_API_TOKEN` — TRIP API key (recommended when OIDC is enabled; generate in TRIP Settings)
 - `TRIP_USERNAME` — Login username (fallback when `TRIP_API_TOKEN` is not set)
 - `TRIP_PASSWORD` — Login password (fallback when `TRIP_API_TOKEN` is not set)
+- `TRIP_MCP_LOG_LEVEL` — `INFO` (default) or `DEBUG` for verbose tool/API logging
+
+### Debugging
+
+Logs go to stdout — view them with Docker:
+
+```bash
+docker logs -f <mcp-container>
+```
+
+Set `TRIP_MCP_LOG_LEVEL=DEBUG` to see MCP protocol payloads, HTTP details, tool arguments, and API request bodies.
 
 When OIDC is configured, password login is disabled on the TRIP backend. Use `TRIP_API_TOKEN` instead:
 

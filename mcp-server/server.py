@@ -1,8 +1,29 @@
 """TRIP MCP Server — manage trips, places, and itineraries via AI tools."""
+import logging
+import os
+
 from fastmcp import FastMCP
+from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+from fastmcp.server.middleware.logging import LoggingMiddleware
+from fastmcp.server.middleware.timing import TimingMiddleware
+
 from auth import api_delete, api_get, api_post, api_put
+from log_config import TripToolLoggingMiddleware, log_startup_config, setup_logging
+
+setup_logging()
+logger = logging.getLogger("trip.mcp")
 
 mcp = FastMCP("TRIP")
+mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True))
+mcp.add_middleware(TimingMiddleware())
+mcp.add_middleware(
+    LoggingMiddleware(
+        include_payloads=os.environ.get("TRIP_MCP_LOG_LEVEL", "INFO").upper() == "DEBUG",
+        max_payload_length=1000,
+        logger=logging.getLogger("trip.mcp.protocol"),
+    )
+)
+mcp.add_middleware(TripToolLoggingMiddleware())
 
 
 # ── Response helpers ──
@@ -416,8 +437,26 @@ async def update_item(
         data["place"] = current["place"]["id"]
 
     if not data:
+        logger.warning(
+            "update_item: no fields to update for trip=%s day=%s item=%s (text=%r time=%r comment=%r notes=%r status=%r)",
+            trip_id,
+            day_id,
+            item_id,
+            text,
+            time,
+            comment,
+            notes,
+            status,
+        )
         raise RuntimeError("No fields to update")
 
+    logger.info(
+        "update_item: trip=%s day=%s item=%s payload=%s",
+        trip_id,
+        day_id,
+        item_id,
+        data,
+    )
     item = await api_put(f"/api/trips/{trip_id}/days/{day_id}/items/{item_id}", data)
     return _slim_item(item)
 
@@ -705,4 +744,6 @@ async def invite_member(trip_id: int, username: str) -> dict:
 
 
 if __name__ == "__main__":
+    log_startup_config()
+    logger.info("listening on http://0.0.0.0:3001/mcp")
     mcp.run(transport="http", host="0.0.0.0", port=3001)
