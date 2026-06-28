@@ -174,6 +174,36 @@ async def _ensure_place_linked_to_trip(trip_id: int, place_id: int) -> None:
     logger.info("linked place %s to trip %s", place_id, trip_id)
 
 
+def _comment_for_place_change(
+    existing_comment: str | None,
+    old_place_description: str | None,
+    new_description: str | None,
+) -> tuple[bool, str | None]:
+    """Return whether to update comment and the new value when changing an item's place."""
+    current = (existing_comment or "").strip()
+    old = (old_place_description or "").strip()
+
+    if not current:
+        return True, new_description
+
+    if current == old:
+        return True, new_description
+
+    if old:
+        for separator in ("\n\n", "\r\n", "\r\n\r\n", "\n"):
+            prefix = old + separator
+            if current.startswith(prefix):
+                suffix = current[len(prefix) :].strip()
+                if not new_description:
+                    return True, suffix or None
+                new_text = new_description.strip()
+                if suffix:
+                    return True, f"{new_text}\n\n{suffix}"
+                return True, new_description
+
+    return False, None
+
+
 async def _enrich_item_with_place(
     data: dict,
     trip_id: int,
@@ -204,15 +234,17 @@ async def _enrich_item_with_place(
         data["text"] = place["name"]
 
     if fill_comment and "comment" not in data:
-        current_comment = (existing_comment or "").strip()
-        old_description = (old_place_description or "").strip()
         new_description = place.get("description")
 
         if old_place_id is not None and old_place_id != place_id:
-            # Place change: adopt new description unless the comment was customized.
-            if not current_comment or current_comment == old_description:
-                data["comment"] = new_description
-        elif not current_comment and new_description:
+            should_update, new_comment = _comment_for_place_change(
+                existing_comment,
+                old_place_description,
+                new_description,
+            )
+            if should_update:
+                data["comment"] = new_comment
+        elif not (existing_comment or "").strip() and new_description:
             data["comment"] = new_description
 
     logger.info(
@@ -501,7 +533,7 @@ async def update_item(
     place_id: int | None = None,
     remove_place: bool = False,
 ) -> dict:
-    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Changing place_id copies the new place description into comment unless the current comment was customized (differs from the old place description). Status: pending, booked, constraint, optional (booked=confirmed)."""
+    """Update an EXISTING item (requires item_id from get_day). Use for text, time, comment, status, or place changes. Changing place_id replaces the old place description in comment (including when extra lines were added below it); other custom edits are kept. Status: pending, booked, constraint, optional (booked=confirmed)."""
     current = await _find_item(trip_id, day_id, item_id)
     if not current:
         raise RuntimeError(f"Item {item_id} not found on day {day_id} of trip {trip_id}")
